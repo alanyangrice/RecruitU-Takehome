@@ -4,7 +4,6 @@ from typing import List
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
-from .schemas import UploadResumeResponse, TargetProfile, RankRequest, RankResponse, ReRankRequest, Candidate, ScoredCandidate, CandidateScores, WeightMap
 from .routers.public import router as public_router
 
 app = FastAPI(title="RecruitU Similarity Backend")

@@ -61,25 +61,15 @@ def score_candidates_with_spec(cands: List[Candidate], target: TargetProfile, sp
         prev_companies = []
         if f["previous_companies"]:
             prev_companies = [s.strip() for s in f["previous_companies"].split(",") if s.strip()]
-        companies_score = max(
-            _score_from_mapping(f["current_company"], spec.companies),
-            _score_any_from_mapping(prev_companies, spec.companies),
-        )
+        current_experience = _score_from_mapping(f["current_company"], spec.companies)
+        previous_experience = _score_any_from_mapping(prev_companies, spec.companies)
 
         prev_titles = []
         if f["previous_titles"]:
             prev_titles = [s.strip() for s in f["previous_titles"].split(",") if s.strip()]
-        title_score = max(
-            _score_from_mapping(f["current_title"], spec.titles),
-            _score_any_from_mapping(prev_titles, spec.titles),
-        )
+        title_score = _score_from_mapping(f["current_title"], spec.titles)
 
         school_score = _score_from_mapping(f["school"], spec.schools)
-        location_score = _score_from_mapping(f["city"], spec.locations)
-
-        sector_score = 0.0
-        if spec.sectors:
-            sector_score = max(companies_score, _score_from_mapping(f["current_title"], spec.sectors))
 
         y_current = None
         if f["current_starts_at"]:
@@ -88,20 +78,25 @@ def score_candidates_with_spec(cands: List[Candidate], target: TargetProfile, sp
                 y_current = datetime.utcnow().year - int(f["current_starts_at"])  # rough
             except Exception:
                 y_current = None
-        yoe_current_score = _score_years(y_current, getattr(spec, "yoe_current_target", None), getattr(spec, "yoe_current_tolerance_years", 3.0))
-        yoe_total_score = _score_years(getattr(target, "total_years_experience", None), spec.yoe_target, spec.yoe_tolerance_years)
-
-        skills_score = 0.0
+        # Years experience scoring uses two-step ramp based on target.yoe_target
+        y_total = getattr(target, "total_years_experience", None)
+        yoe_total_score = 0.0
+        if y_total is not None and spec.yoe_target is not None:
+            diff = abs(float(y_total) - float(spec.yoe_target))
+            if diff <= spec.yoe_score1_max_diff:
+                yoe_total_score = 1.0
+            elif diff <= spec.yoe_score0_5_max_diff:
+                yoe_total_score = 0.5
+            else:
+                yoe_total_score = 0.0
 
         results.append(
             CandidateScores(
-                education=school_score,
-                companies=companies_score,
-                title_seniority=title_score,
-                years_experience=max(yoe_total_score, yoe_current_score),
-                location=location_score,
-                sector=sector_score,
-                skills=skills_score,
+                current_experience=current_experience,
+                previous_experience=previous_experience,
+                title=title_score,
+                school=school_score,
+                years_experience=max(yoe_total_score, 0.0),
             )
         )
     return results
