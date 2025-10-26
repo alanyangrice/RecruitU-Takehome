@@ -1,102 +1,166 @@
 from __future__ import annotations
-from typing import List
-from ..schemas.types import Candidate, CandidateScores, TargetProfile, SimilaritySpec
+from typing import Iterable, List, Tuple, Dict, Optional
+from ..schemas.types import (
+    CandidateScore,
+    ParsedResume,
+    RecruitUDocument as RecruitUSearchDocument,
+    SimilarityPlan,
+    FactorName,
+    FactorPlan,
+)
+
+# ---------- small utilities ----------
+
+def _normalize(s: Optional[str]) -> str:
+    return (s or "").strip().lower()
 
 
-def _string_or_none(value):
-    if isinstance(value, str):
-        return value
-    return None
+def _contains_any(hay: Optional[str], needles: Iterable[str]) -> bool:
+    hay_n = _normalize(hay)
+    return any((n := _normalize(x)) and n in hay_n for x in needles)
 
 
-def _extract_candidate_fields(c: Candidate) -> dict:
-    p = c.profile or {}
-    doc = p.get("document") or p
-    current = doc.get("current_company") or {}
-    undergrad = doc.get("undergrad") or {}
-    return {
-        "current_company": _string_or_none(current.get("company")),
-        "current_title": _string_or_none(current.get("title")),
-        "previous_companies": _string_or_none(doc.get("previous_companies")),
-        "previous_titles": _string_or_none(doc.get("previous_titles")),
-        "city": _string_or_none(doc.get("city")),
-        "school": _string_or_none(undergrad.get("school")),
-        "current_starts_at": (current.get("starts_at") or {}).get("year"),
+def _safe_attr(obj, attr: str, default=None):
+    return getattr(obj, attr, default) if obj is not None else default
+
+
+def _tri_level_score(field: str, top: Iterable[str], mid: Iterable[str], low: Iterable[str]) -> float:
+    if _contains_any(field, top):
+        return 1.0
+    if _contains_any(field, mid):
+        return 0.75
+    if _contains_any(field, low):
+        return 0.5
+    return 0.0
+
+
+# ---------- core scoring ----------
+
+def score_document(doc: RecruitUSearchDocument, plan: SimilarityPlan) -> Dict[FactorName, float]:
+    factors: Dict[FactorName, float] = {}
+
+    # current_experience: company match from current_company.company
+    company_field = _safe_attr(_safe_attr(doc, "current_company"), "company", "") or ""
+    fp_company: FactorPlan = plan.factors.get(FactorName.current_experience, FactorPlan())
+    score_company = _tri_level_score(company_field, fp_company.exact_1_0, fp_company.neighbors_0_75, fp_company.neighbors_0_5)
+    factors[FactorName.current_experience] = score_company
+
+    # previous_experience: string field previous_companies
+    score_prev = _tri_level_score(doc.previous_companies or "", fp_company.exact_1_0, fp_company.neighbors_0_75, fp_company.neighbors_0_5)
+    factors[FactorName.previous_experience] = score_prev
+
+    # title: prefer doc.title; fallback to current_company.title
+    title_field = (doc.title or _safe_attr(_safe_attr(doc, "current_company"), "title", "")) or ""
+    fp_title: FactorPlan = plan.factors.get(FactorName.title, FactorPlan())
+    score_title = _tri_level_score(title_field, fp_title.exact_1_0, fp_title.neighbors_0_75, fp_title.neighbors_0_5)
+    factors[FactorName.title] = score_title
+
+    # school
+    fp_school: FactorPlan = plan.factors.get(FactorName.school, FactorPlan())
+    score_school = _tri_level_score(doc.school or "", fp_school.exact_1_0, fp_school.neighbors_0_75, fp_school.neighbors_0_5)
+    factors[FactorName.school] = score_school
+
+    # years_of_experience removed from scoring
+
+    # location (city)
+    fp_loc: FactorPlan = plan.factors.get(FactorName.location, FactorPlan())
+    loc_score = _tri_level_score(doc.city or "", fp_loc.exact_1_0, fp_loc.neighbors_0_75, fp_loc.neighbors_0_5)
+    factors[FactorName.location] = loc_score
+    return factors
+
+
+# Weighted scoring out of 100
+FACTOR_WEIGHTS: Dict[FactorName, float] = {
+    FactorName.current_experience: 50.0,
+    FactorName.previous_experience: 10.0,
+    FactorName.title: 15.0,
+    FactorName.school: 17.5,
+    FactorName.location: 7.5,
+}
+
+
+def aggregate_score(breakdown: Dict[FactorName, float]) -> float:
+    if not breakdown:
+        return 0.0
+    total = sum(FACTOR_WEIGHTS[f] * breakdown.get(f, 0.0) for f in FACTOR_WEIGHTS)
+    return round(total, 2)
+    
+
+# ---------- aggregation workflow ----------
+
+async def aggregate_and_score(
+    client,
+    parsed: ParsedResume,
+    plan: SimilarityPlan,
+    return_stats: bool = False,
+    search_count: int = 1000,
+):
+    """
+    Ordered aggregation workflow:
+      1) current_company → add if new
+      2) previous_company (each) → add if new
+      3) title → add if new
+      4) school → add if new
+      5) location → add if new
+
+    Then: return ranked results (no people enrichment).
+    """
+    total_map: Dict[str, CandidateScore] = {}
+    counters: Dict[str, int] = {
+        "current_added": 0,
+        "previous_added": 0,
+        "title_added": 0,
+        "school_added": 0,
+        "location_added": 0,
     }
 
-
-def _score_from_mapping(value: str | None, mapping: dict[str, float]) -> float:
-    if not value or not mapping:
-        return 0.0
-    v = value.lower()
-    best = 0.0
-    for key, score in mapping.items():
-        if not isinstance(key, str):
-            continue
-        if key.lower() in v:
-            best = max(best, float(score))
-    return best
-
-
-def _score_any_from_mapping(values: list[str], mapping: dict[str, float]) -> float:
-    best = 0.0
-    for v in values:
-        best = max(best, _score_from_mapping(v, mapping))
-    return best
-
-
-def _score_years(candidate_value: float | None, target_value: float | None, tol_years: float) -> float:
-    if candidate_value is None or target_value is None:
-        return 0.0
-    diff = abs(float(candidate_value) - float(target_value))
-    if tol_years <= 0:
-        return 0.0
-    return max(0.0, 1.0 - min(1.0, diff / tol_years))
-
-
-def score_candidates_with_spec(cands: List[Candidate], target: TargetProfile, spec: SimilaritySpec) -> List[CandidateScores]:
-    results: list[CandidateScores] = []
-    for c in cands:
-        f = _extract_candidate_fields(c)
-        prev_companies = []
-        if f["previous_companies"]:
-            prev_companies = [s.strip() for s in f["previous_companies"].split(",") if s.strip()]
-        current_experience = _score_from_mapping(f["current_company"], spec.companies)
-        previous_experience = _score_any_from_mapping(prev_companies, spec.companies)
-
-        prev_titles = []
-        if f["previous_titles"]:
-            prev_titles = [s.strip() for s in f["previous_titles"].split(",") if s.strip()]
-        title_score = _score_from_mapping(f["current_title"], spec.titles)
-
-        school_score = _score_from_mapping(f["school"], spec.schools)
-
-        y_current = None
-        if f["current_starts_at"]:
-            try:
-                from datetime import datetime
-                y_current = datetime.utcnow().year - int(f["current_starts_at"])  # rough
-            except Exception:
-                y_current = None
-        # Years experience scoring uses two-step ramp based on target.yoe_target
-        y_total = getattr(target, "total_years_experience", None)
-        yoe_total_score = 0.0
-        if y_total is not None and spec.yoe_target is not None:
-            diff = abs(float(y_total) - float(spec.yoe_target))
-            if diff <= spec.yoe_score1_max_diff:
-                yoe_total_score = 1.0
-            elif diff <= spec.yoe_score0_5_max_diff:
-                yoe_total_score = 0.5
-            else:
-                yoe_total_score = 0.0
-
-        results.append(
-            CandidateScores(
-                current_experience=current_experience,
-                previous_experience=previous_experience,
-                title=title_score,
-                school=school_score,
-                years_experience=max(yoe_total_score, 0.0),
+    async def _search_and_add(query_key: str, query_value: str, counter_key: str):
+        if not query_value:
+            return
+        res = await client.search({query_key: query_value, "count": search_count})
+        for r in res.results:
+            if r.id in total_map:
+                continue
+            factors = score_document(r, plan)
+            total_map[r.id] = CandidateScore(
+                candidate_id=r.id,
+                total_score=aggregate_score(factors),
+                factors=factors,
+                document=r,
             )
-        )
-    return results
+            counters[counter_key] += 1
+
+    # 1) current company
+    await _search_and_add("current_company", parsed.current_company or "", "current_added")
+
+    # 2) previous companies
+    for pc in (parsed.previous_companies or []):
+        if pc:
+            await _search_and_add("previous_company", pc, "previous_added")
+
+    # 3) title
+    await _search_and_add("title", parsed.title or "", "title_added")
+
+    # 4) school
+    await _search_and_add("school", parsed.school or "", "school_added")
+
+    # 5) location (city)
+    if getattr(parsed, "city", None):
+        await _search_and_add("city", parsed.city, "location_added")
+
+    # Rank results
+    scored = list(total_map.values())
+    scored.sort(key=lambda c: c.total_score, reverse=True)
+
+    if return_stats:
+        stats = {
+            "current_company_added": counters["current_added"],
+            "previous_company_added": counters["previous_added"],
+            "title_added": counters["title_added"],
+            "school_added": counters["school_added"],
+            "location_added": counters["location_added"],
+            "total_candidates": len(total_map),
+        }
+        return scored, stats
+
+    return scored

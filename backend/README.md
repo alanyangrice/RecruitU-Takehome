@@ -1,17 +1,45 @@
-# RecruitU Similarity Backend (FastAPI)
+# RecruitU Similarity Backend (MVP)
 
-Public endpoints:
-- POST `/api/resume` — upload PDF resume, returns `targetId`, `targetProfile`, and `rawText`.
-- POST `/api/people/rank` — end-to-end search + scoring. Input `targetId` or inline `targetProfile`, plus `weights`. Returns `searchId` and ranked `results`.
-- POST `/api/people/rerank` — recompute composite scores for an existing `searchId` using new `weights` (no additional LLM calls).
+FastAPI backend implementing the workflow:
 
-## Getting started
+- Upload resume (PDF)
+- Parse text and extract fields with OpenAI
+- Generate similarity plan (companies, titles, schools, experience bands)
+- Search RecruitU API
+- Score results using five factors only
 
-1. `python -m venv .venv && source .venv/bin/activate`
-2. `pip install -r backend/requirements.txt`
-3. Copy `backend/.env.example` to `backend/.env` and fill values.
-4. Run: `uvicorn app.main:app --reload --app-dir backend/app --host 0.0.0.0 --port 8000`
+## Setup
 
-Notes:
-- If `OPENAI_API_KEY` is not set, the app falls back to deterministic heuristics and zeros for scores.
-- Set `RECRUITU_BASE_URL` to the staging base from the assessment. The app will return empty candidates if not configured.
+1. Python 3.11+
+2. Create `.env` in this directory:
+
+```
+OPENAI_API_KEY=sk-...
+RECRUITU_BASE_URL=https://staging.recruitu.com/api/<token>
+ALLOWED_ORIGINS=*
+```
+
+3. Install deps
+
+```
+pip install -r requirements.txt
+```
+
+4. Run server
+
+```
+uvicorn app.main:app --reload --port 8080
+```
+
+## API
+
+- `GET /api/health`
+- `POST /api/upload` (multipart form)
+  - field `file`: PDF resume
+  - response: parsed fields, similarity plan, ranked candidates with factor breakdowns
+
+## Notes
+
+- Only five scoring factors: `current_experience`, `previous_experience`, `title`, `school`, `years_of_experience`.
+- Experience bands: 1.0 close band around N years; 0.5 for next band; else 0.
+

@@ -1,158 +1,180 @@
 from __future__ import annotations
-import json
-import os
-from typing import List, Dict
+from typing import Any
 from openai import OpenAI
 from ..config import settings
-from ..schemas.types import TargetProfile, SimilaritySpec
-
-_client: OpenAI | None = None
+from ..schemas.types import ParsedResume, SimilarityPlan, FactorPlan, FactorName
 
 
-def _client_if_configured() -> OpenAI | None:
-    global _client
-    if _client is not None:
-        return _client
-    if settings.openai_api_key:
-        _client = OpenAI(api_key=settings.openai_api_key)
-    return _client
+SYSTEM_EXTRACT = (
+    "You are an expert resume parser for finance roles. "
+    "Extract ONLY these fields as concise values: full_name, current_company, previous_companies (array), "
+    "title (map to one of: Analyst, Associate, Vice President, Director, Managing Director if possible), "
+    "school (primary undergrad), city (current city if present). "
+    "Respond as strict JSON for the ParsedResume pydantic model."
+)
 
 
-def extract_target_profile(text: str) -> TargetProfile:
-    client = _client_if_configured()
-    if client is None:
-        # No API key configured, raise an error
-        raise ValueError("OpenAI client not configured")
-        
-    schema = {
+SYSTEM_PLAN = (
+    "You generate similarity targets for company, title, school, and location. "
+    "Rules (OUTPUT EXACT COUNTS): Company: exactly 3 at 1.0, 10 at 0.75, 10 at 0.5; no duplicates; exclude the exact company from 0.75/0.5. "
+    "Title (Analyst, Associate, Vice President, Director, Managing Director): exactly 1 at 1.0 (same title), 2 at 0.75, 1 at 0.5. "
+    "School: exactly 3 at 1.0 (peer schools with similar ranking/prestige; include the original school in 1.0), 10 at 0.75, 15 at 0.5. "
+    "Location: provide multiple city names for each list: 3 at 1.0 for location_exact_1_0 (major cities in neighboring states), 20 at 0.75 for location_neighbors_0_75 (major cities in the same regional area like northeast, southeast, west coast, etc.), 30 at 0.5 for location_neighbors_0_5 (major cities in across the country). "
+    "Return strict JSON with top-level arrays named: current_company_* , title_* , school_* , location_* ."
+)
+
+
+def _client() -> OpenAI:
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY not configured")
+    return OpenAI(api_key=settings.openai_api_key)
+
+def _json_schema_for_parsed_resume() -> dict[str, Any]:
+    return {
+        "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
+        "additionalProperties": False,
         "properties": {
-            "full_name": {"type": "string"},
-            "headline": {"type": "string"},
-            "total_years_experience": {"type": "number"},
-            "locations": {"type": "array", "items": {"type": "string"}},
-            "current_company": {"type": "string"},
-            "current_title": {"type": "string"},
-            "sector": {"type": "string"},
-            "skills": {"type": "array", "items": {"type": "string"}},
-            "education": {
+            "full_name": {"type": ["string", "null"]},
+            "current_company": {"type": ["string", "null"]},
+            "previous_companies": {
                 "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "school": {"type": "string"},
-                        "degree": {"type": "string"},
-                        "field": {"type": "string"},
-                        "grad_year": {"type": "integer"},
-                    },
-                    "required": [],
-                },
+                "items": {"type": "string"},
+                "default": [],
             },
+            "title": {"type": ["string", "null"]},
+            "school": {"type": ["string", "null"]},
+            "city": {"type": ["string", "null"]},
         },
-        "required": [],
+        "required": [
+            "full_name",
+            "current_company",
+            "previous_companies",
+            "title",
+            "school",
+        ],
     }
-    resp = client.responses.create(
-        model=settings.openai_model_extract,
-        input=[
-            {
-                "role": "user",
-                "content": f"Extract a TargetProfile JSON from the following resume text.\n\n{text}",
-            }
-        ],
-        response_format={
-            "type": "json_schema",
-            "json_schema": {"name": "TargetProfile", "schema": schema},
-        },
-        temperature=0.2,
-    )
-    data = resp.output_parsed or {}
-    return TargetProfile(**data)
 
 
-def generate_search_plan(target: TargetProfile) -> tuple[List[Dict], SimilaritySpec]:
-    """
-    Single entry performing the two LLM calls needed for search and scoring
-    for the five-factor model: current_experience, previous_experience, title,
-    school, and years_of_experience.
-    """
-    client = _client_if_configured()
-    if client is None:
-        raise ValueError("OpenAI client not configured")
-
-    # Call 1: queries (only allowed keys for RecruitU /search we care about)
-    q_system = (
-        "Given a target candidate profile, generate RecruitU /search filter objects. "
-        "Only use these keys: current_company, previous_company, title, school. "
-        "Prefer exact strings present in the profile; "
-        "infer reasonable variants when helpful. Do not include null or unknown fields. "
-        "Return JSON with a 'queries' array."
-    )
-    payload = target.model_dump()
-    q_resp = client.responses.create(
-        model=settings.openai_model_extract,
-        input=[
-            {"role": "system", "content": q_system},
-            {"role": "user", "content": json.dumps(payload)},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.2,
-    )
-    q_parsed = q_resp.output_parsed or {}
-    raw_queries = q_parsed.get("queries", [])
-    allowed = {"current_company", "previous_company", "title", "school"}
-    queries: list[dict] = []
-    for q in raw_queries:
-        if isinstance(q, dict):
-            filtered = {k: v for k, v in q.items() if k in allowed and v not in (None, "", [])}
-            if filtered:
-                queries.append(filtered)
-        if len(queries) >= 6:
-            break
-    if not queries:
-        queries = []
-
-    # Call 2: similarity spec with constrained ratings (1.0 and 0.5) for 3+3 companies,
-    # 2+2 titles from the fixed ladder, and 3+3 schools; plus YOE thresholds.
-    s_prompt = (
-        "Given a target profile JSON, return a SimilaritySpec for exactly five factors: "
-        "companies (used for current and previous experience), titles, schools, and years of experience. "
-        "Companies: include exactly 3 with score 1.0 (not including the same company) and exactly 3 with score 0.5. "
-        "Titles: choose from [Analyst, Associate, Vice President, Director, Managing Director]; include exactly 2 with score 1.0 (the same title and the adjacent level), and exactly 2 with score 0.5; omit one to imply 0. "
-        "Schools: include exactly 3 with score 1.0 (not including the same school) and exactly 3 with score 0.5. "
-        "For years of experience, include: yoe_target (float), yoe_score1_max_diff=1.0, yoe_score0_5_max_diff=3.0. "
-        "Return only these fields and omit nulls."
-    )
-    s_schema = {
+def _json_schema_for_similarity_plan() -> dict[str, Any]:
+    arr_str = {"type": "array", "items": {"type": "string"}}
+    return {
+        "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
+        "additionalProperties": False,
         "properties": {
-            "companies": {"type": "object", "additionalProperties": {"type": "number", "enum": [0.5, 1.0]}},
-            "titles": {"type": "object", "additionalProperties": {"type": "number", "enum": [0.5, 1.0]}},
-            "schools": {"type": "object", "additionalProperties": {"type": "number", "enum": [0.5, 1.0]}},
-            "yoe_target": {"type": ["number", "null"]},
-            "yoe_score1_max_diff": {"type": "number"},
-            "yoe_score0_5_max_diff": {"type": "number"},
+            "current_company_exact_and_neighbors_1_0": {**arr_str, "maxItems": 3},
+            "current_company_neighbors_0_75": {**arr_str, "maxItems": 10},
+            "current_company_neighbors_0_5": {**arr_str, "maxItems": 10},
+            "title_exact_and_neighbors_1_0": {**arr_str, "maxItems": 1},
+            "title_neighbors_0_75": {**arr_str, "maxItems": 2},
+            "title_neighbors_0_5": {**arr_str, "maxItems": 1},
+            "school_exact_and_neighbors_1_0": {**arr_str, "maxItems": 3},
+            "school_neighbors_0_75": {**arr_str, "maxItems": 10},
+            "school_neighbors_0_5": {**arr_str, "maxItems": 15},
+            "location_exact_1_0": {**arr_str, "maxItems": 3},
+            "location_neighbors_0_75": {**arr_str, "maxItems": 20},
+            "location_neighbors_0_5": {**arr_str, "maxItems": 30},
         },
-        "required": [],
+        "required": [
+            "current_company_exact_and_neighbors_1_0",
+            "current_company_neighbors_0_75",
+            "current_company_neighbors_0_5",
+            "title_exact_and_neighbors_1_0",
+            "title_neighbors_0_75",
+            "title_neighbors_0_5",
+            "school_exact_and_neighbors_1_0",
+            "school_neighbors_0_75",
+            "school_neighbors_0_5",
+            "location_exact_1_0",
+            "location_neighbors_0_75",
+            "location_neighbors_0_5",
+        ],
     }
-    s_resp = client.responses.create(
+
+
+def _chat_json_with_schema(model: str, system: str, user: str, schema_name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    client = _client()
+    # First attempt: strict JSON schema
+    try:
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.1,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "schema": schema, "strict": True},
+            },
+        )
+        raw = completion.choices[0].message.content or "{}"
+        return __import__("json").loads(raw)
+    except Exception:
+        # Fallback: json_object with a strong instruction still yields valid JSON
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system + " Always return strict JSON only."},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        raw = completion.choices[0].message.content or "{}"
+        return __import__("json").loads(raw)
+
+
+def parse_resume_text(text: str) -> ParsedResume:
+    """
+    Parse the resume text and return a ParsedResume object.
+    """
+    data = _chat_json_with_schema(
         model=settings.openai_model_extract,
-        input=[{"role": "system", "content": s_prompt}, {"role": "user", "content": json.dumps(payload)}],
-        response_format={"type": "json_schema", "json_schema": {"name": "SimilaritySpec", "schema": s_schema}},
-        temperature=0.2,
+        system=SYSTEM_EXTRACT,
+        user=text,
+        schema_name="ParsedResume",
+        schema=_json_schema_for_parsed_resume(),
     )
-    s_data = s_resp.output_parsed or {}
-    spec = SimilaritySpec(**s_data)
-
-    return queries, spec
+    parsed = ParsedResume.model_validate(data)
+    return parsed
 
 
-def generate_recruitu_queries(target: TargetProfile) -> List[Dict]:
-    """Compatibility wrapper: uses generate_search_plan to fetch queries only."""
-    queries, _ = generate_search_plan(target)
-    return queries
+def build_similarity_plan(parsed: ParsedResume) -> SimilarityPlan:
+    user_payload = __import__("json").dumps(parsed.model_dump())
+    data = _chat_json_with_schema(
+        model=settings.openai_model_score,
+        system=SYSTEM_PLAN,
+        user=user_payload,
+        schema_name="SimilarityPlan",
+        schema=_json_schema_for_similarity_plan(),
+    )
+    # Build SimilarityPlan.factors from flat arrays
+    def dedupe_limit(values: list[str], limit: int) -> list[str]:
+        return list(dict.fromkeys(values))[:limit]
 
+    # Dedupe and truncate
+    company_1 = dedupe_limit(data.get("current_company_exact_and_neighbors_1_0", []), 3)
+    company_075 = dedupe_limit(data.get("current_company_neighbors_0_75", []), 10)
+    company_05 = dedupe_limit(data.get("current_company_neighbors_0_5", []), 10)
 
-def build_similarity_spec(target: TargetProfile) -> SimilaritySpec:
-    """Compatibility wrapper: uses generate_search_plan to fetch spec only."""
-    _, spec = generate_search_plan(target)
-    return spec
+    title_1 = dedupe_limit(data.get("title_exact_and_neighbors_1_0", []), 1)
+    title_075 = dedupe_limit(data.get("title_neighbors_0_75", []), 2)
+    title_05 = dedupe_limit([v for v in data.get("title_neighbors_0_5", []) if v not in title_1], 1)
+
+    school_1 = dedupe_limit(data.get("school_exact_and_neighbors_1_0", []), 3)
+    school_075 = dedupe_limit(data.get("school_neighbors_0_75", []), 10)
+    school_05 = dedupe_limit([v for v in data.get("school_neighbors_0_5", []) if v not in school_1], 15)
+
+    loc_1 = dedupe_limit(data.get("location_exact_1_0", []), 3)
+    loc_075 = dedupe_limit(data.get("location_neighbors_0_75", []), 20)
+    loc_05 = dedupe_limit(data.get("location_neighbors_0_5", []), 30)
+
+    factors = {
+        FactorName.current_experience: FactorPlan(exact_1_0=company_1, neighbors_0_75=company_075, neighbors_0_5=company_05),
+        FactorName.title: FactorPlan(exact_1_0=title_1, neighbors_0_75=title_075, neighbors_0_5=title_05),
+        FactorName.school: FactorPlan(exact_1_0=school_1, neighbors_0_75=school_075, neighbors_0_5=school_05),
+        FactorName.location: FactorPlan(exact_1_0=loc_1, neighbors_0_75=loc_075, neighbors_0_5=loc_05),
+    }
+    return SimilarityPlan(factors=factors)
