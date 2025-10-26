@@ -15,7 +15,8 @@ async def upload_resume(file: UploadFile = File(...)):
     try:
         resume_text = extract_pdf_text(await file.read())
 
-        # Parse resume text and build similarity plan
+        # Parse resume text into structured fields, then build a similarity plan
+        # that lists close neighbors per factor (company/title/school/location).
         parsed = parse_resume_text(resume_text)
         plan = build_similarity_plan(parsed)
 

@@ -37,6 +37,7 @@ def _tri_level_score(field: str, top: Iterable[str], mid: Iterable[str], low: It
 # ---------- core scoring ----------
 
 def score_document(doc: RecruitUSearchDocument, plan: SimilarityPlan) -> Dict[FactorName, float]:
+    """Score a document based on the similarity plan and return a dictionary of factors and their scores."""
     factors: Dict[FactorName, float] = {}
 
     # current_experience: company match from current_company.company

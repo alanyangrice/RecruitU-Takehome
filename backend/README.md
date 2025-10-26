@@ -1,17 +1,22 @@
-# RecruitU Similarity Backend (MVP)
+# RecruitU Similarity Backend
 
-FastAPI backend implementing the workflow:
+FastAPI backend that implements the end‑to‑end workflow:
 
 - Upload resume (PDF)
-- Parse text and extract fields with OpenAI
-- Generate similarity plan (companies, titles, schools, experience bands)
-- Search RecruitU API
-- Score results using five factors only
+- Parse text and extract fields with OpenAI (name, current/previous company, title, school, city)
+- Generate a similarity plan of targets (companies/titles/schools/locations) in 1.0/0.75/0.5 tiers
+- Query the RecruitU search API and score each candidate
+- Return ranked results and the plan to the client
+
+Scoring factors (sum to 100):
+- current_experience (50), previous_experience (10), title (15), school (17.5), location (7.5)
+
+Years of experience scoring was intentionally removed per requirements.
 
 ## Setup
 
-1. Python 3.11+
-2. Create `.env` in this directory:
+1) Python 3.11+
+2) Create `.env` in `backend/`:
 
 ```
 OPENAI_API_KEY=sk-...
@@ -19,13 +24,13 @@ RECRUITU_BASE_URL=https://staging.recruitu.com/api/<token>
 ALLOWED_ORIGINS=*
 ```
 
-3. Install deps
+3) Install deps
 
 ```
 pip install -r requirements.txt
 ```
 
-4. Run server
+4) Run server
 
 ```
 uvicorn app.main:app --reload --port 8080
@@ -33,13 +38,17 @@ uvicorn app.main:app --reload --port 8080
 
 ## API
 
-- `GET /api/health`
-- `POST /api/upload` (multipart form)
-  - field `file`: PDF resume
-  - response: parsed fields, similarity plan, ranked candidates with factor breakdowns
+- `GET /api/health` → `{ "status": "ok" }`
+- `POST /api/upload` (multipart/form-data)
+  - field: `file` (PDF)
+  - returns:
+    - `parsed`: fields extracted from the resume
+    - `query_plan`: Similarity plan (FactorPlan per factor)
+    - `results`: ranked candidates with `total_score` and `factors` map
 
-## Notes
+## Progress reporting
 
-- Only five scoring factors: `current_experience`, `previous_experience`, `title`, `school`, `years_of_experience`.
-- Experience bands: 1.0 close band around N years; 0.5 for next band; else 0.
+The current endpoint is a single request/response. The frontend shows a simple client‑side progress indicator (uploading → parsing → planning → searching → scoring → done).
+
+If you need streaming server‑side progress, add an SSE endpoint that emits step events while the workflow runs; the frontend can subscribe and reflect real‑time status.
 

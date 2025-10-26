@@ -12,6 +12,7 @@ class RecruitUClient:
             raise RuntimeError("RECRUITU_BASE_URL not configured")
 
     async def search(self, params: Dict[str, Any]) -> PaginatedResponse[RecruitUDocument]:
+        """Query the RecruitU search API and return a paginated response of documents."""
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(f"{self.base_url}/search", params=params)
             resp.raise_for_status()

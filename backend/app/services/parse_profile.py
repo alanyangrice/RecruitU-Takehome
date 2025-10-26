@@ -25,6 +25,7 @@ SYSTEM_PLAN = (
 
 
 def _client() -> OpenAI:
+    """Create a configured OpenAI client from environment settings."""
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY not configured")
     return OpenAI(api_key=settings.openai_api_key)
@@ -94,6 +95,11 @@ def _json_schema_for_similarity_plan() -> dict[str, Any]:
 
 
 def _chat_json_with_schema(model: str, system: str, user: str, schema_name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """
+    Chat with the LLM using a strict JSON schema.
+
+    Returns a dictionary parsed from the LLM's response.
+    """
     client = _client()
     # First attempt: strict JSON schema
     try:
@@ -128,7 +134,9 @@ def _chat_json_with_schema(model: str, system: str, user: str, schema_name: str,
 
 def parse_resume_text(text: str) -> ParsedResume:
     """
-    Parse the resume text and return a ParsedResume object.
+    Extract structured fields from raw resume text using an LLM with a strict JSON schema.
+
+    Returns a `ParsedResume` with the minimal fields needed for planning & scoring.
     """
     data = _chat_json_with_schema(
         model=settings.openai_model_extract,
@@ -142,6 +150,11 @@ def parse_resume_text(text: str) -> ParsedResume:
 
 
 def build_similarity_plan(parsed: ParsedResume) -> SimilarityPlan:
+    """
+    Ask the LLM to propose search/score targets per factor and coerce into `SimilarityPlan`.
+
+    The output is normalized and truncated for each tier (1.0 / 0.75 / 0.5).
+    """
     user_payload = __import__("json").dumps(parsed.model_dump())
     data = _chat_json_with_schema(
         model=settings.openai_model_score,
@@ -152,6 +165,7 @@ def build_similarity_plan(parsed: ParsedResume) -> SimilarityPlan:
     )
     # Build SimilarityPlan.factors from flat arrays
     def dedupe_limit(values: list[str], limit: int) -> list[str]:
+        """Stable de‑dupe preserving order and enforce a maximum length."""
         return list(dict.fromkeys(values))[:limit]
 
     # Dedupe and truncate
