@@ -23,6 +23,7 @@ const App: React.FC = () => {
   const [status, setStatus] = useState<'idle' | 'uploading' | 'parsing' | 'planning' | 'searching' | 'scoring' | 'done' | 'error'>('idle')
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<UploadResponse | null>(null)
+  const [visibleCount, setVisibleCount] = useState<number>(20)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -44,6 +45,7 @@ const App: React.FC = () => {
       setStatus('searching')
       const json = (await res.json()) as UploadResponse
       setStatus('scoring')
+      setVisibleCount(20)
       setData(json)
       setStatus('done')
     } catch (err: any) {
@@ -84,7 +86,7 @@ const App: React.FC = () => {
           <pre style={{ background: '#f6f8fa', padding: 12, overflow: 'auto' }}>{JSON.stringify(data.query_plan, null, 2)}</pre>
 
           <h2>Top Results</h2>
-          {data.results.slice(0, 20).map((r) => (
+          {data.results.slice(0, visibleCount).map((r) => (
             <div key={r.candidate_id} style={{ border: '1px solid #ddd', borderRadius: 6, padding: 12, marginBottom: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <div>
@@ -100,6 +102,19 @@ const App: React.FC = () => {
               </details>
             </div>
           ))}
+          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ color: '#555' }}>
+              Showing {Math.min(visibleCount, data.results.length)} of {data.results.length}
+            </span>
+            {visibleCount < data.results.length && (
+              <button
+                onClick={() => setVisibleCount((c) => Math.min(c + 20, data.results.length))}
+                disabled={visibleCount >= data.results.length}
+              >
+                Load more matches
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
