@@ -74,8 +74,8 @@ def score_document(doc: RecruitUSearchDocument, plan: SimilarityPlan) -> Dict[Fa
 
 # Weighted scoring out of 100
 FACTOR_WEIGHTS: Dict[FactorName, float] = {
-    FactorName.current_experience: 40.0,
-    FactorName.previous_experience: 10.0,
+    FactorName.current_experience: 45.0,
+    FactorName.previous_experience: 15.0,
     FactorName.title: 15.0,
     FactorName.school: 17.5,
     FactorName.location: 7.5,

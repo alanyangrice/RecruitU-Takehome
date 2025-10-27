@@ -16,10 +16,10 @@ SYSTEM_EXTRACT = (
 
 SYSTEM_PLAN = (
     "You generate similarity targets for company, title, school, and location. "
-    "Rules (OUTPUT EXACT COUNTS): Company: exactly 3 at 1.0, 3 at 0.75, 3 at 0.5, 3 at 0.25; no duplicates; exclude the exact company from 0.75/0.5/0.25. "
+    "Rules (OUTPUT EXACT COUNTS): Company: exactly 3 at 1.0, 3 at 0.75, 5 at 0.5, 5 at 0.25; no duplicates; exclude the exact company from 0.75/0.5/0.25. "
     "Title (Analyst, Associate, Vice President, Director, Managing Director): exactly 1 at 1.0 (same title), 1 at 0.75, 1 at 0.5, 1 at 0.25. "
-    "School: exactly 3 at 1.0 (peer schools with similar ranking/prestige; include the original school in 1.0), 3 at 0.75, 3 at 0.5, 3 at 0.25. "
-    "Location: response must be the name of the city. provide multiple city names for each list: 3 at 1.0 for location_exact_1_0 (major cities in neighboring states), 3 at 0.75 for location_neighbors_0_75 (major cities in the same regional area like northeast, southeast, west coast, etc.), 3 at 0.5 for location_neighbors_0_5 (major cities across the country), 3 at 0.25 for location_neighbors_0_25 (farther domestic cities). "
+    "School: exactly 5 at 1.0 (peer schools with similar ranking/prestige; include the original school in 1.0), 5 at 0.75, 5 at 0.5, 5 at 0.25. "
+    "Location: response must be the name of the city, do not add anything additional. Examples of what you should do: 'New York', 'Austin'. Examples of what you should not do: 'New York, NY' or 'Austin, TX'. provide multiple city names for each list: 5 at 1.0 for location_exact_1_0 (major cities in neighboring states), 5 at 0.75 for location_neighbors_0_75 (major cities in the same regional area like northeast, southeast, west coast, etc.), 5 at 0.5 for location_neighbors_0_5 (major cities across the country), 5 at 0.25 for location_neighbors_0_25 (farther domestic cities). "
     "Return strict JSON with top-level arrays named: current_company_* , title_* , school_* , location_* ."
 )
 
@@ -66,20 +66,20 @@ def _json_schema_for_similarity_plan() -> dict[str, Any]:
         "properties": {
             "current_company_exact_and_neighbors_1_0": {**arr_str, "maxItems": 3},
             "current_company_neighbors_0_75": {**arr_str, "maxItems": 3},
-            "current_company_neighbors_0_5": {**arr_str, "maxItems": 3},
-            "current_company_neighbors_0_25": {**arr_str, "maxItems": 3},
+            "current_company_neighbors_0_5": {**arr_str, "maxItems": 5},
+            "current_company_neighbors_0_25": {**arr_str, "maxItems": 5},
             "title_exact_and_neighbors_1_0": {**arr_str, "maxItems": 1},
             "title_neighbors_0_75": {**arr_str, "maxItems": 1},
             "title_neighbors_0_5": {**arr_str, "maxItems": 1},
             "title_neighbors_0_25": {**arr_str, "maxItems": 1},
-            "school_exact_and_neighbors_1_0": {**arr_str, "maxItems": 3},
-            "school_neighbors_0_75": {**arr_str, "maxItems": 3},
-            "school_neighbors_0_5": {**arr_str, "maxItems": 3},
-            "school_neighbors_0_25": {**arr_str, "maxItems": 3},
-            "location_exact_1_0": {**arr_str, "maxItems": 3},
-            "location_neighbors_0_75": {**arr_str, "maxItems": 3},
-            "location_neighbors_0_5": {**arr_str, "maxItems": 3},
-            "location_neighbors_0_25": {**arr_str, "maxItems": 3},
+            "school_exact_and_neighbors_1_0": {**arr_str, "maxItems": 5},
+            "school_neighbors_0_75": {**arr_str, "maxItems": 5},
+            "school_neighbors_0_5": {**arr_str, "maxItems": 5},
+            "school_neighbors_0_25": {**arr_str, "maxItems": 5},
+            "location_exact_1_0": {**arr_str, "maxItems": 5},
+            "location_neighbors_0_75": {**arr_str, "maxItems": 5},
+            "location_neighbors_0_5": {**arr_str, "maxItems": 5},
+            "location_neighbors_0_25": {**arr_str, "maxItems": 5},
         },
         "required": [
             "current_company_exact_and_neighbors_1_0",
@@ -179,23 +179,23 @@ def build_similarity_plan(parsed: ParsedResume) -> SimilarityPlan:
     # Dedupe and truncate
     company_1 = dedupe_limit(data.get("current_company_exact_and_neighbors_1_0", []), 3)
     company_075 = dedupe_limit(data.get("current_company_neighbors_0_75", []), 3)
-    company_05 = dedupe_limit(data.get("current_company_neighbors_0_5", []), 3)
-    company_025 = dedupe_limit([v for v in data.get("current_company_neighbors_0_25", []) if v not in company_1], 3)
+    company_05 = dedupe_limit(data.get("current_company_neighbors_0_5", []), 5)
+    company_025 = dedupe_limit([v for v in data.get("current_company_neighbors_0_25", []) if v not in company_1], 5)
 
     title_1 = dedupe_limit(data.get("title_exact_and_neighbors_1_0", []), 1)
     title_075 = dedupe_limit(data.get("title_neighbors_0_75", []), 1)
     title_05 = dedupe_limit([v for v in data.get("title_neighbors_0_5", []) if v not in title_1], 1)
     title_025 = dedupe_limit([v for v in data.get("title_neighbors_0_25", []) if v not in title_1], 1)
 
-    school_1 = dedupe_limit(data.get("school_exact_and_neighbors_1_0", []), 3)
-    school_075 = dedupe_limit(data.get("school_neighbors_0_75", []), 3)
-    school_05 = dedupe_limit([v for v in data.get("school_neighbors_0_5", []) if v not in school_1], 3)
-    school_025 = dedupe_limit([v for v in data.get("school_neighbors_0_25", []) if v not in school_1], 3)
+    school_1 = dedupe_limit(data.get("school_exact_and_neighbors_1_0", []), 5)
+    school_075 = dedupe_limit(data.get("school_neighbors_0_75", []), 5)
+    school_05 = dedupe_limit([v for v in data.get("school_neighbors_0_5", []) if v not in school_1], 5)
+    school_025 = dedupe_limit([v for v in data.get("school_neighbors_0_25", []) if v not in school_1], 5)
 
-    loc_1 = dedupe_limit(data.get("location_exact_1_0", []), 3)
-    loc_075 = dedupe_limit(data.get("location_neighbors_0_75", []), 3)
-    loc_05 = dedupe_limit(data.get("location_neighbors_0_5", []), 3)
-    loc_025 = dedupe_limit([v for v in data.get("location_neighbors_0_25", []) if v not in loc_1], 3)
+    loc_1 = dedupe_limit(data.get("location_exact_1_0", []), 5)
+    loc_075 = dedupe_limit(data.get("location_neighbors_0_75", []), 5)
+    loc_05 = dedupe_limit(data.get("location_neighbors_0_5", []), 5)
+    loc_025 = dedupe_limit([v for v in data.get("location_neighbors_0_25", []) if v not in loc_1], 5)
 
     factors = {
         FactorName.current_experience: FactorPlan(exact_1_0=company_1, neighbors_0_75=company_075, neighbors_0_5=company_05, neighbors_0_25=company_025),
