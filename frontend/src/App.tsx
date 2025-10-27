@@ -25,6 +25,37 @@ const App: React.FC = () => {
   const [data, setData] = useState<UploadResponse | null>(null)
   const [visibleCount, setVisibleCount] = useState<number>(20)
 
+  const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024 // 5MB
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0] ?? null
+    setError(null)
+    if (!f) {
+      setFile(null)
+      return
+    }
+    const isPdf = f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+    if (!isPdf) {
+      setFile(null)
+      setError('Please upload a PDF file (.pdf).')
+      return
+    }
+    if (f.size > MAX_FILE_SIZE_BYTES) {
+      setFile(null)
+      setError('File is too large. Max size is 5MB.')
+      return
+    }
+    setFile(f)
+  }
+
+  function handleReset() {
+    setFile(null)
+    setError(null)
+    setData(null)
+    setStatus('idle')
+    setVisibleCount(20)
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!file) return
@@ -39,8 +70,19 @@ const App: React.FC = () => {
       const res = await fetch('/api/upload', { method: 'POST', body: form })
       setStatus('planning')
       if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || 'Request failed')
+        let detail = 'Request failed'
+        try {
+          const text = await res.text()
+          if (text) {
+            try {
+              const parsed = JSON.parse(text)
+              detail = parsed?.detail || text
+            } catch {
+              detail = text
+            }
+          }
+        } catch {}
+        throw new Error(detail)
       }
       setStatus('searching')
       const json = (await res.json()) as UploadResponse
@@ -63,10 +105,14 @@ const App: React.FC = () => {
         <input
           type="file"
           accept="application/pdf"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          onChange={handleFileChange}
+          disabled={status !== 'idle' && status !== 'error' && status !== 'done'}
         />
         <button type="submit" disabled={!file || status === 'uploading' || status === 'parsing' || status === 'planning' || status === 'searching' || status === 'scoring'} style={{ marginLeft: 8 }}>
           Start
+        </button>
+        <button type="button" onClick={handleReset} disabled={status === 'uploading' || status === 'parsing' || status === 'planning' || status === 'searching' || status === 'scoring'} style={{ marginLeft: 8 }}>
+          Reset
         </button>
       </form>
 
