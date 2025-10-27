@@ -16,10 +16,10 @@ SYSTEM_EXTRACT = (
 
 SYSTEM_PLAN = (
     "You generate similarity targets for company, title, school, and location. "
-    "Rules (OUTPUT EXACT COUNTS): Company: exactly 3 at 1.0, 10 at 0.75, 10 at 0.5; no duplicates; exclude the exact company from 0.75/0.5. "
-    "Title (Analyst, Associate, Vice President, Director, Managing Director): exactly 1 at 1.0 (same title), 2 at 0.75, 1 at 0.5. "
-    "School: exactly 3 at 1.0 (peer schools with similar ranking/prestige; include the original school in 1.0), 10 at 0.75, 15 at 0.5. "
-    "Location: provide multiple city names for each list: 3 at 1.0 for location_exact_1_0 (major cities in neighboring states), 20 at 0.75 for location_neighbors_0_75 (major cities in the same regional area like northeast, southeast, west coast, etc.), 30 at 0.5 for location_neighbors_0_5 (major cities in across the country). "
+    "Rules (OUTPUT EXACT COUNTS): Company: exactly 3 at 1.0, 3 at 0.75, 3 at 0.5, 3 at 0.25; no duplicates; exclude the exact company from 0.75/0.5/0.25. "
+    "Title (Analyst, Associate, Vice President, Director, Managing Director): exactly 1 at 1.0 (same title), 1 at 0.75, 1 at 0.5, 1 at 0.25. "
+    "School: exactly 3 at 1.0 (peer schools with similar ranking/prestige; include the original school in 1.0), 3 at 0.75, 3 at 0.5, 3 at 0.25. "
+    "Location: response must be the name of the city. provide multiple city names for each list: 3 at 1.0 for location_exact_1_0 (major cities in neighboring states), 3 at 0.75 for location_neighbors_0_75 (major cities in the same regional area like northeast, southeast, west coast, etc.), 3 at 0.5 for location_neighbors_0_5 (major cities across the country), 3 at 0.25 for location_neighbors_0_25 (farther domestic cities). "
     "Return strict JSON with top-level arrays named: current_company_* , title_* , school_* , location_* ."
 )
 
@@ -65,31 +65,39 @@ def _json_schema_for_similarity_plan() -> dict[str, Any]:
         "additionalProperties": False,
         "properties": {
             "current_company_exact_and_neighbors_1_0": {**arr_str, "maxItems": 3},
-            "current_company_neighbors_0_75": {**arr_str, "maxItems": 10},
-            "current_company_neighbors_0_5": {**arr_str, "maxItems": 10},
+            "current_company_neighbors_0_75": {**arr_str, "maxItems": 3},
+            "current_company_neighbors_0_5": {**arr_str, "maxItems": 3},
+            "current_company_neighbors_0_25": {**arr_str, "maxItems": 3},
             "title_exact_and_neighbors_1_0": {**arr_str, "maxItems": 1},
-            "title_neighbors_0_75": {**arr_str, "maxItems": 2},
+            "title_neighbors_0_75": {**arr_str, "maxItems": 1},
             "title_neighbors_0_5": {**arr_str, "maxItems": 1},
+            "title_neighbors_0_25": {**arr_str, "maxItems": 1},
             "school_exact_and_neighbors_1_0": {**arr_str, "maxItems": 3},
-            "school_neighbors_0_75": {**arr_str, "maxItems": 10},
-            "school_neighbors_0_5": {**arr_str, "maxItems": 15},
+            "school_neighbors_0_75": {**arr_str, "maxItems": 3},
+            "school_neighbors_0_5": {**arr_str, "maxItems": 3},
+            "school_neighbors_0_25": {**arr_str, "maxItems": 3},
             "location_exact_1_0": {**arr_str, "maxItems": 3},
-            "location_neighbors_0_75": {**arr_str, "maxItems": 20},
-            "location_neighbors_0_5": {**arr_str, "maxItems": 30},
+            "location_neighbors_0_75": {**arr_str, "maxItems": 3},
+            "location_neighbors_0_5": {**arr_str, "maxItems": 3},
+            "location_neighbors_0_25": {**arr_str, "maxItems": 3},
         },
         "required": [
             "current_company_exact_and_neighbors_1_0",
             "current_company_neighbors_0_75",
             "current_company_neighbors_0_5",
+            "current_company_neighbors_0_25",
             "title_exact_and_neighbors_1_0",
             "title_neighbors_0_75",
             "title_neighbors_0_5",
+            "title_neighbors_0_25",
             "school_exact_and_neighbors_1_0",
             "school_neighbors_0_75",
             "school_neighbors_0_5",
+            "school_neighbors_0_25",
             "location_exact_1_0",
             "location_neighbors_0_75",
             "location_neighbors_0_5",
+            "location_neighbors_0_25",
         ],
     }
 
@@ -153,7 +161,7 @@ def build_similarity_plan(parsed: ParsedResume) -> SimilarityPlan:
     """
     Ask the LLM to propose search/score targets per factor and coerce into `SimilarityPlan`.
 
-    The output is normalized and truncated for each tier (1.0 / 0.75 / 0.5).
+    The output is normalized and truncated for each tier (1.0 / 0.75 / 0.5 / 0.25).
     """
     user_payload = __import__("json").dumps(parsed.model_dump())
     data = _chat_json_with_schema(
@@ -170,25 +178,29 @@ def build_similarity_plan(parsed: ParsedResume) -> SimilarityPlan:
 
     # Dedupe and truncate
     company_1 = dedupe_limit(data.get("current_company_exact_and_neighbors_1_0", []), 3)
-    company_075 = dedupe_limit(data.get("current_company_neighbors_0_75", []), 10)
-    company_05 = dedupe_limit(data.get("current_company_neighbors_0_5", []), 10)
+    company_075 = dedupe_limit(data.get("current_company_neighbors_0_75", []), 3)
+    company_05 = dedupe_limit(data.get("current_company_neighbors_0_5", []), 3)
+    company_025 = dedupe_limit([v for v in data.get("current_company_neighbors_0_25", []) if v not in company_1], 3)
 
     title_1 = dedupe_limit(data.get("title_exact_and_neighbors_1_0", []), 1)
-    title_075 = dedupe_limit(data.get("title_neighbors_0_75", []), 2)
+    title_075 = dedupe_limit(data.get("title_neighbors_0_75", []), 1)
     title_05 = dedupe_limit([v for v in data.get("title_neighbors_0_5", []) if v not in title_1], 1)
+    title_025 = dedupe_limit([v for v in data.get("title_neighbors_0_25", []) if v not in title_1], 1)
 
     school_1 = dedupe_limit(data.get("school_exact_and_neighbors_1_0", []), 3)
-    school_075 = dedupe_limit(data.get("school_neighbors_0_75", []), 10)
-    school_05 = dedupe_limit([v for v in data.get("school_neighbors_0_5", []) if v not in school_1], 15)
+    school_075 = dedupe_limit(data.get("school_neighbors_0_75", []), 3)
+    school_05 = dedupe_limit([v for v in data.get("school_neighbors_0_5", []) if v not in school_1], 3)
+    school_025 = dedupe_limit([v for v in data.get("school_neighbors_0_25", []) if v not in school_1], 3)
 
     loc_1 = dedupe_limit(data.get("location_exact_1_0", []), 3)
-    loc_075 = dedupe_limit(data.get("location_neighbors_0_75", []), 20)
-    loc_05 = dedupe_limit(data.get("location_neighbors_0_5", []), 30)
+    loc_075 = dedupe_limit(data.get("location_neighbors_0_75", []), 3)
+    loc_05 = dedupe_limit(data.get("location_neighbors_0_5", []), 3)
+    loc_025 = dedupe_limit([v for v in data.get("location_neighbors_0_25", []) if v not in loc_1], 3)
 
     factors = {
-        FactorName.current_experience: FactorPlan(exact_1_0=company_1, neighbors_0_75=company_075, neighbors_0_5=company_05),
-        FactorName.title: FactorPlan(exact_1_0=title_1, neighbors_0_75=title_075, neighbors_0_5=title_05),
-        FactorName.school: FactorPlan(exact_1_0=school_1, neighbors_0_75=school_075, neighbors_0_5=school_05),
-        FactorName.location: FactorPlan(exact_1_0=loc_1, neighbors_0_75=loc_075, neighbors_0_5=loc_05),
+        FactorName.current_experience: FactorPlan(exact_1_0=company_1, neighbors_0_75=company_075, neighbors_0_5=company_05, neighbors_0_25=company_025),
+        FactorName.title: FactorPlan(exact_1_0=title_1, neighbors_0_75=title_075, neighbors_0_5=title_05, neighbors_0_25=title_025),
+        FactorName.school: FactorPlan(exact_1_0=school_1, neighbors_0_75=school_075, neighbors_0_5=school_05, neighbors_0_25=school_025),
+        FactorName.location: FactorPlan(exact_1_0=loc_1, neighbors_0_75=loc_075, neighbors_0_5=loc_05, neighbors_0_25=loc_025),
     }
     return SimilarityPlan(factors=factors)

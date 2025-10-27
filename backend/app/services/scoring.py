@@ -24,13 +24,15 @@ def _safe_attr(obj, attr: str, default=None):
     return getattr(obj, attr, default) if obj is not None else default
 
 
-def _tri_level_score(field: str, top: Iterable[str], mid: Iterable[str], low: Iterable[str]) -> float:
+def _level_score(field: str, top: Iterable[str], mid: Iterable[str], low: Iterable[str], very_low: Iterable[str]) -> float:
     if _contains_any(field, top):
         return 1.0
     if _contains_any(field, mid):
         return 0.75
     if _contains_any(field, low):
         return 0.5
+    if _contains_any(field, very_low):
+        return 0.25
     return 0.0
 
 
@@ -43,36 +45,36 @@ def score_document(doc: RecruitUSearchDocument, plan: SimilarityPlan) -> Dict[Fa
     # current_experience: company match from current_company.company
     company_field = _safe_attr(_safe_attr(doc, "current_company"), "company", "") or ""
     fp_company: FactorPlan = plan.factors.get(FactorName.current_experience, FactorPlan())
-    score_company = _tri_level_score(company_field, fp_company.exact_1_0, fp_company.neighbors_0_75, fp_company.neighbors_0_5)
+    score_company = _level_score(company_field, fp_company.exact_1_0, fp_company.neighbors_0_75, fp_company.neighbors_0_5, fp_company.neighbors_0_25)
     factors[FactorName.current_experience] = score_company
 
     # previous_experience: string field previous_companies
-    score_prev = _tri_level_score(doc.previous_companies or "", fp_company.exact_1_0, fp_company.neighbors_0_75, fp_company.neighbors_0_5)
+    score_prev = _level_score(doc.previous_companies or "", fp_company.exact_1_0, fp_company.neighbors_0_75, fp_company.neighbors_0_5, fp_company.neighbors_0_25)
     factors[FactorName.previous_experience] = score_prev
 
     # title: prefer doc.title; fallback to current_company.title
     title_field = (doc.title or _safe_attr(_safe_attr(doc, "current_company"), "title", "")) or ""
     fp_title: FactorPlan = plan.factors.get(FactorName.title, FactorPlan())
-    score_title = _tri_level_score(title_field, fp_title.exact_1_0, fp_title.neighbors_0_75, fp_title.neighbors_0_5)
+    score_title = _level_score(title_field, fp_title.exact_1_0, fp_title.neighbors_0_75, fp_title.neighbors_0_5, fp_title.neighbors_0_25)
     factors[FactorName.title] = score_title
 
     # school
     fp_school: FactorPlan = plan.factors.get(FactorName.school, FactorPlan())
-    score_school = _tri_level_score(doc.school or "", fp_school.exact_1_0, fp_school.neighbors_0_75, fp_school.neighbors_0_5)
+    score_school = _level_score(doc.school or "", fp_school.exact_1_0, fp_school.neighbors_0_75, fp_school.neighbors_0_5, fp_school.neighbors_0_25)
     factors[FactorName.school] = score_school
 
     # years_of_experience removed from scoring
 
     # location (city)
     fp_loc: FactorPlan = plan.factors.get(FactorName.location, FactorPlan())
-    loc_score = _tri_level_score(doc.city or "", fp_loc.exact_1_0, fp_loc.neighbors_0_75, fp_loc.neighbors_0_5)
+    loc_score = _level_score(doc.city or "", fp_loc.exact_1_0, fp_loc.neighbors_0_75, fp_loc.neighbors_0_5, fp_loc.neighbors_0_25)
     factors[FactorName.location] = loc_score
     return factors
 
 
 # Weighted scoring out of 100
 FACTOR_WEIGHTS: Dict[FactorName, float] = {
-    FactorName.current_experience: 50.0,
+    FactorName.current_experience: 40.0,
     FactorName.previous_experience: 10.0,
     FactorName.title: 15.0,
     FactorName.school: 17.5,

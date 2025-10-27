@@ -25,6 +25,7 @@ class FactorPlan(BaseModel):
     exact_1_0: List[str] = Field(default_factory=list)
     neighbors_0_75: List[str] = Field(default_factory=list)
     neighbors_0_5: List[str] = Field(default_factory=list)
+    neighbors_0_25: List[str] = Field(default_factory=list)
 
 
 class SimilarityPlan(BaseModel):
