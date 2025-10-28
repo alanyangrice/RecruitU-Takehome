@@ -74,6 +74,3 @@ Runtime flow (end‑to‑end):
     - `parsed`: extracted fields
     - `query_plan`: `SimilarityPlan` (per-factor `FactorPlan` with tiers)
     - `results`: ranked `CandidateScore[]` with `total_score` and factor breakdown
-
-Endpoint response shapes from assignment context are summarized in `assessment_context/endpoint_details.txt`.
-
