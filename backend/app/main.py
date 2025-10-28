@@ -8,7 +8,7 @@ from .routers.public import router as public_router
 
 app = FastAPI(title="RecruitU Similarity Backend")
 
-# CORS configuration: if wildcard origins are used, credentials must be disabled
+# CORS configuration
 origins = (
     ["*"]
     if not settings.allowed_origins or settings.allowed_origins == "*"

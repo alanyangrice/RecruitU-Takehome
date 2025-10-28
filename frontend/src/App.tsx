@@ -59,7 +59,8 @@ const App: React.FC = () => {
       form.append('file', file)
       // Client-side progress UX mirrors backend phases (approximate)
       setStatus('parsing')
-      const res = await fetch('/api/upload', { method: 'POST', body: form })
+      const apiBase = import.meta.env.VITE_API_BASE ?? 'http://localhost:8080'
+      const res = await fetch(`${apiBase.replace(/\/$/, '')}/api/upload`, { method: 'POST', body: form })
       setStatus('planning')
       if (!res.ok) {
         const text = await res.text()

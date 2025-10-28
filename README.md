@@ -1,6 +1,17 @@
 # RecruitU Takehome
 
 A minimal full-stack MVP to parse a resume, generate a similarity plan, search RecruitU, and score/rank candidates.
+Live demo: 
+
+## How it works
+
+1) Upload a resume PDF
+2) Backend extracts text and parses fields with OpenAI
+3) A similarity plan is built across company, title, school, and location with tiers 1.0 / 0.75 / 0.5 / 0.25
+4) RecruitU is queried; each candidate is scored and ranked
+5) Frontend displays parsed data, plan, and top results with a Load more button
+
+## Tech Stack
 
 ## Quick start
 
@@ -28,14 +39,6 @@ A minimal full-stack MVP to parse a resume, generate a similarity plan, search R
     ```
   - Dev server: http://localhost:5173
   - Proxies `/api` to `http://localhost:8080`
-
-## How it works
-
-1) Upload a resume PDF
-2) Backend extracts text and parses fields with OpenAI
-3) A similarity plan is built across company, title, school, and location with tiers 1.0 / 0.75 / 0.5 / 0.25
-4) RecruitU is queried; each candidate is scored and ranked
-5) Frontend displays parsed data, plan, and top results with a Load more button
 
 ## API
 
